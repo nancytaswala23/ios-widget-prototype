@@ -1,13 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
- <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
- <link rel="icon" type="image/png" sizes="16x16" href="favicon-16x16.png">
- <meta name="apple-mobile-web-app-capable" content="yes">
- <meta name="apple-mobile-web-app-status-bar-style" content="default">
- <meta name="apple-mobile-web-app-title" content="Widget">
-
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>iOS Medium Widget Prototype</title>
@@ -27,6 +20,10 @@
 
       --cta-bg:#111827;
       --cta-text:#ffffff;
+
+      --btn-bg:#111827;
+      --btn-text:#ffffff;
+      --btn-border: 1px solid rgba(0,0,0,0.08);
     }
 
     /* Auto Dark Mode */
@@ -44,6 +41,10 @@
 
         --cta-bg:#eef2ff;
         --cta-text:#0b0f1a;
+
+        --btn-bg:#eef2ff;
+        --btn-text:#0b0f1a;
+        --btn-border: 1px solid rgba(255,255,255,0.10);
       }
     }
 
@@ -71,6 +72,7 @@
       font-size: 16px;
       margin:0;
       opacity: 0.9;
+      text-align:center;
     }
 
     /* Medium widget size */
@@ -173,8 +175,59 @@
       color: var(--text);
     }
 
-    /* Medium widget usually has no CTA button */
-    .cta{ display:none; }
+    /* Controls row under widget */
+    .actions{
+      width: 360px;
+      display:flex;
+      gap: 10px;
+      justify-content: space-between;
+      align-items:center;
+    }
+
+    .btn{
+      flex: 1 1 auto;
+      padding: 10px 12px;
+      border-radius: 14px;
+      border: var(--btn-border);
+      background: var(--btn-bg);
+      color: var(--btn-text);
+      font-weight: 900;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    /* LEVEL 1: Toast */
+    .toast{
+      position: fixed;
+      left: 50%;
+      bottom: 18px;
+      transform: translateX(-50%);
+      max-width: 92vw;
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid rgba(0,0,0,0.10);
+      background: rgba(255,255,255,0.95);
+      color: #0b0f1a;
+      box-shadow: 0 12px 30px rgba(0,0,0,0.18);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .2s ease, transform .2s ease;
+      z-index: 9999;
+    }
+
+    .toast.show{
+      opacity: 1;
+      transform: translateX(-50%) translateY(-4px);
+      pointer-events: auto;
+    }
+
+    @media (prefers-color-scheme: dark){
+      .toast{
+        background: rgba(18,24,38,0.96);
+        color: #eef2ff;
+        border-color: rgba(255,255,255,0.10);
+      }
+    }
   </style>
 </head>
 
@@ -218,13 +271,85 @@
         </div>
       </div>
     </div>
+
+    <!-- LEVEL 1 + 2 ACTIONS -->
+    <div class="actions">
+      <button id="toastBtn" class="btn">Test In-App Alert</button>
+      <button id="pushBtn" class="btn">Enable Push</button>
+    </div>
   </div>
 
+  <!-- LEVEL 1: Toast container -->
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
   <script>
+    // ===== Level 1: In-app toast =====
+    function showToast(message, ms = 2200){
+      const t = document.getElementById("toast");
+      t.textContent = message;
+      t.classList.add("show");
+      clearTimeout(window.__toastTimer);
+      window.__toastTimer = setTimeout(()=> t.classList.remove("show"), ms);
+    }
+
+    document.getElementById("toastBtn").addEventListener("click", () => {
+      showToast("In-app notification ✅");
+    });
+
+    // Keep your widget click behavior
     document.getElementById("widget").addEventListener("click", () => {
       window.open("https://example.com", "_blank");
+    });
+
+    // ===== Level 2: Web Push (needs sw.js + VAPID + backend) =====
+    const VAPID_PUBLIC_KEY = "PASTE_YOUR_PUBLIC_VAPID_KEY_HERE";
+    const BACKEND_SUBSCRIBE_URL = "PASTE_YOUR_BACKEND_SUBSCRIBE_URL_HERE";
+
+    function urlBase64ToUint8Array(base64String) {
+      const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+      const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+      const rawData = atob(base64);
+      const outputArray = new Uint8Array(rawData.length);
+      for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+      return outputArray;
+    }
+
+    async function setupPush() {
+      if (!("serviceWorker" in navigator)) throw new Error("No service worker support");
+      if (!("PushManager" in window)) throw new Error("No Push API support");
+      if (VAPID_PUBLIC_KEY.includes("PASTE_")) throw new Error("Missing VAPID public key");
+      if (BACKEND_SUBSCRIBE_URL.includes("PASTE_")) throw new Error("Missing backend subscribe URL");
+
+      // Register service worker from root (GitHub Pages needs it in repo root)
+      const reg = await navigator.serviceWorker.register("/sw.js");
+
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") {
+        showToast("Push not enabled (permission denied).");
+        return;
+      }
+
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+      });
+
+      await fetch(BACKEND_SUBSCRIBE_URL, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(sub),
+      });
+
+      showToast("Push enabled ✅");
+    }
+
+    document.getElementById("pushBtn").addEventListener("click", () => {
+      setupPush()
+        .catch(err => {
+          console.error(err);
+          showToast(err.message || "Push setup failed. Check console.");
+        });
     });
   </script>
 </body>
 </html>
-
